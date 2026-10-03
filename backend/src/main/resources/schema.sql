@@ -14,6 +14,8 @@ CREATE DATABASE IF NOT EXISTS heat_supply
 USE heat_supply;
 
 SET FOREIGN_KEY_CHECKS = 0;
+DROP TABLE IF EXISTS isolation_step;
+DROP TABLE IF EXISTS isolation_plan;
 DROP TABLE IF EXISTS heating_fee;
 DROP TABLE IF EXISTS repair_order;
 DROP TABLE IF EXISTS room_temp_sample;
@@ -33,7 +35,8 @@ CREATE TABLE heat_source (
     source_status VARCHAR(16) COMMENT '运行 / 检修 / 停用',
     manager VARCHAR(32),
     address VARCHAR(128),
-    commission_date DATE
+    commission_date DATE,
+    outlet_well_no VARCHAR(32) COMMENT '出厂井号（热源接入管网的节点，环网可达性计算起点之一）'
 ) ENGINE = InnoDB DEFAULT CHARSET = utf8mb4 COLLATE = utf8mb4_unicode_ci;
 
 -- ---------------- 换热站 ----------------
@@ -51,6 +54,7 @@ CREATE TABLE heat_station (
     pump_count INT COMMENT '循环泵装机台数',
     running_pump_count INT COMMENT '当前运行循环泵台数',
     station_status VARCHAR(16) COMMENT '运行 / 检修 / 停用',
+    feed_well_no VARCHAR(32) COMMENT '一次侧接入井号（换热站挂接管网的节点，停暖判定依据）',
     manager VARCHAR(32),
     address VARCHAR(128),
     last_maintain_date DATE,
@@ -75,13 +79,18 @@ CREATE TABLE pipe_segment (
 ) ENGINE = InnoDB DEFAULT CHARSET = utf8mb4 COLLATE = utf8mb4_unicode_ci;
 
 -- ---------------- 阀门井 ----------------
+-- 一口阀门井 = 一台阀门 + 其所在井节点（node_no）。同一井节点可有多台分属不同管段的阀（分段阀 / 联络阀），
+-- 因此拓扑以 node_no 为节点、以管段为边，阀门只封堵其所属管段（边）。
 CREATE TABLE valve_well (
     id BIGINT AUTO_INCREMENT PRIMARY KEY,
     well_no VARCHAR(32) NOT NULL UNIQUE,
+    node_no VARCHAR(32) COMMENT '井节点号：该阀门所在拓扑节点（同节点可有多台阀）',
     well_location VARCHAR(128),
     valve_caliber_dn INT COMMENT '阀门口径 DN',
     open_state VARCHAR(16) COMMENT '全开 / 半开 / 关闭',
     repair_status VARCHAR(16) COMMENT '正常 / 检修中',
+    operable TINYINT(1) DEFAULT 1 COMMENT '现场是否可操作：0 不可操作（阀杆抱死 / 检修拆装 / 无法到位）',
+    egress_exit TINYINT(1) DEFAULT 0 COMMENT '是否为井下作业人员安全撤离通道口',
     segment_id BIGINT,
     last_check_date DATE,
     remark VARCHAR(128),
@@ -157,34 +166,94 @@ CREATE TABLE heating_fee (
     CONSTRAINT fk_fee_resident FOREIGN KEY (resident_id) REFERENCES resident (id)
 ) ENGINE = InnoDB DEFAULT CHARSET = utf8mb4 COLLATE = utf8mb4_unicode_ci;
 
+-- ---------------- 管网隔离方案（故障管段关断闭环主表） ----------------
+-- 状态机：草稿(试算) -> 已启用 -> 执行中 -> 已隔离 / 失败待处置
+--   失败收口：EXPAND 扩大隔离后回到 执行中；ROLLBACK 已安全恢复 -> 已撤回；HOLD 保持现场等待处置
+--   已隔离 -> 现场修复完成 -> 复供试算(RESTORING) -> 已复供；复供后仍不可达的换热站留在异常清单
+CREATE TABLE isolation_plan (
+    id BIGINT AUTO_INCREMENT PRIMARY KEY,
+    plan_no VARCHAR(32) NOT NULL UNIQUE COMMENT '方案编号',
+    plan_type VARCHAR(16) NOT NULL DEFAULT 'ISOLATE' COMMENT 'ISOLATE 故障隔离 / RESTORE 复供',
+    parent_plan_id BIGINT COMMENT '复供方案来源的隔离方案',
+    fault_segment_id BIGINT COMMENT '故障管段',
+    fault_reason VARCHAR(128) COMMENT '故障 / 隔离原因',
+    plan_status VARCHAR(16) NOT NULL DEFAULT '草稿' COMMENT '草稿/已启用/执行中/已隔离/失败待处置/已撤回/复供试算/已复供',
+    strategy VARCHAR(16) COMMENT 'EXPAND 扩大停暖确保安全 / WAIT_ALT 拒绝启用等待替代路径',
+    proof_passed TINYINT(1) DEFAULT 0 COMMENT '最近一次拓扑证明：故障段是否已与运行管网隔开',
+    proof_detail VARCHAR(1024) COMMENT '证明结论与未通过原因（端点可达性、违规项）',
+    supply_paths_json TEXT COMMENT '可保供路径（源 -> 换热站路径）',
+    affected_json TEXT COMMENT '受影响换热站清单快照（与阀门实况同步重算）',
+    valve_snapshot_json TEXT COMMENT '方案各阀门：原态/目标态/分类（计划关闭/原本关闭/必须开启）',
+    baseline_snapshot_json TEXT COMMENT '试算时刻阀门实况（用于现场比对他人改动）',
+    deviation_json TEXT COMMENT '偏差记录：步骤偏差、现场另行调整的阀门',
+    failure_outcome VARCHAR(16) COMMENT 'EXPAND / ROLLBACK / HOLD',
+    failure_note VARCHAR(255),
+    failure_time DATETIME,
+    restore_proof_detail VARCHAR(1024) COMMENT '复供后仍不可达换热站异常清单说明',
+    created_by VARCHAR(32),
+    enabled_time DATETIME,
+    isolated_time DATETIME,
+    restored_time DATETIME,
+    created_time DATETIME NOT NULL,
+    updated_time DATETIME NOT NULL,
+    KEY idx_plan_segment (fault_segment_id),
+    KEY idx_plan_parent (parent_plan_id)
+) ENGINE = InnoDB DEFAULT CHARSET = utf8mb4 COLLATE = utf8mb4_unicode_ci;
+
+-- ---------------- 隔离/复供操作步骤（阀门关断序列） ----------------
+CREATE TABLE isolation_step (
+    id BIGINT AUTO_INCREMENT PRIMARY KEY,
+    plan_id BIGINT NOT NULL,
+    step_no INT NOT NULL COMMENT '顺序号：关断顺序不得切断人员安全退出路径',
+    valve_well_id BIGINT COMMENT '阀门（撤离确认步骤为空）',
+    well_no VARCHAR(32),
+    node_no VARCHAR(32),
+    action_type VARCHAR(16) NOT NULL COMMENT 'CLOSE 关闭 / OPEN 开启 / CHECK_CLOSED 确认原本关闭 / EVACUATE 人员撤离确认 / PROOF 隔离验证',
+    valve_category VARCHAR(16) COMMENT 'PLANNED_CLOSE 计划关闭 / ALREADY_CLOSED 原本关闭 / MUST_OPEN 必须开启 / 人工操作',
+    planned_state VARCHAR(16) COMMENT '计划到位状态：关闭 / 全开 / 半开',
+    state_before VARCHAR(16) COMMENT '步骤下发前阀门实况',
+    observed_state VARCHAR(16) COMMENT '现场反馈的阀门状态',
+    step_status VARCHAR(16) NOT NULL DEFAULT '待执行' COMMENT '待执行/已完成/已跳过/已暂停/偏差挂起',
+    egress_required TINYINT(1) DEFAULT 0 COMMENT '是否撤离前提步骤',
+    deviation_reason VARCHAR(255) COMMENT '偏差原因（反馈与计划不符 / 他人已改变 / 前一步未完成）',
+    completed_by VARCHAR(32),
+    completed_time DATETIME,
+    remark VARCHAR(255),
+    UNIQUE KEY uk_step (plan_id, step_no),
+    KEY idx_step_valve (valve_well_id),
+    CONSTRAINT fk_step_plan FOREIGN KEY (plan_id) REFERENCES isolation_plan (id)
+) ENGINE = InnoDB DEFAULT CHARSET = utf8mb4 COLLATE = utf8mb4_unicode_ci;
+
 -- =====================================================================
 -- 种子数据
 -- =====================================================================
 
 -- 热源厂 5 座
-INSERT INTO heat_source (id, source_name, capacity_mw, fuel_type, source_status, manager, address, commission_date) VALUES
-    (1, '城东热电厂', 1450.00, '热电联产', '运行', '陈国栋', '东环路 118 号', '1998-11-15'),
-    (2, '城北热源厂', 860.00, '燃煤', '运行', '李柏林', '北三环路 26 号', '2004-10-28'),
-    (3, '西城燃气热源厂', 420.00, '燃气', '运行', '王海涛', '西山路 9 号', '2012-11-01'),
-    (4, '南岭调峰热源厂', 320.00, '燃气', '检修', '赵鹏', '南岭工业区 3 号', '2016-12-20'),
-    (5, '向阳路备用热源', 180.00, '燃煤', '停用', '孙立军', '向阳路 47 号', '2001-10-15');
+INSERT INTO heat_source (id, source_name, capacity_mw, fuel_type, source_status, manager, address, commission_date,
+                         outlet_well_no) VALUES
+    (1, '城东热电厂', 1450.00, '热电联产', '运行', '陈国栋', '东环路 118 号', '1998-11-15', 'J101'),
+    (2, '城北热源厂', 860.00, '燃煤', '运行', '李柏林', '北三环路 26 号', '2004-10-28', 'J113'),
+    (3, '西城燃气热源厂', 420.00, '燃气', '运行', '王海涛', '西山路 9 号', '2012-11-01', 'J108'),
+    (4, '南岭调峰热源厂', 320.00, '燃气', '检修', '赵鹏', '南岭工业区 3 号', '2016-12-20', NULL),
+    (5, '向阳路备用热源', 180.00, '燃煤', '停用', '孙立军', '向阳路 47 号', '2001-10-15', NULL);
 
 -- 换热站 10 座（一次侧温差 / 设计温差 = 负荷率，覆盖低负荷、正常、超负荷）
 INSERT INTO heat_station (id, station_code, station_name, heat_source_id, area_wan_m2, primary_supply_temp,
                           primary_return_temp, secondary_supply_temp, secondary_return_temp, design_delta_t,
-                          pump_count, running_pump_count, station_status, manager, address, last_maintain_date) VALUES
-    (1,  'HS-01', '朝阳里换热站',   1, 26.50, 94.0, 68.0, 52.0, 42.0, 25.0, 4, 3, '运行', '张涛', '朝阳里小区东门南侧', '2025-10-08'),
-    (2,  'HS-02', '和平新村换热站', 1, 18.20, 90.0, 71.0, 48.0, 40.0, 25.0, 3, 2, '运行', '刘敏', '和平新村 5 号楼旁', '2025-09-22'),
-    (3,  'HS-03', '滨河家园换热站', 1, 21.60, 86.0, 73.0, 46.0, 39.0, 25.0, 3, 2, '运行', '周正阳', '滨河家园地下车库旁', '2025-11-03'),
-    (4,  'HS-04', '兴安里换热站',   2, 15.80, 92.0, 70.0, 50.0, 41.0, 25.0, 3, 3, '运行', '吴国庆', '兴安里小区西配房', '2025-10-19'),
-    (5,  'HS-05', '北苑小区换热站', 2, 12.40, 78.0, 76.0, 41.0, 38.0, 25.0, 2, 1, '检修', '郑立群', '北苑小区锅炉房旧址', '2025-12-11'),
-    (6,  'HS-06', '站前广场换热站', 2,  9.60,  0.0,  0.0,  0.0,  0.0, 25.0, 2, 0, '停用', '马晓东', '站前广场地下夹层', '2025-08-30'),
-    (7,  'HS-07', '加州花园换热站', 3, 23.30, 91.0, 67.0, 51.0, 42.0, 25.0, 4, 3, '运行', '李成志', '加州花园 12 号楼后', '2025-10-25'),
-    (8,  'HS-08', '西港新居换热站', 3, 17.90, 85.0, 69.0, 47.0, 40.0, 25.0, 3, 2, '运行', '何雅丽', '西港新居泵房', '2025-11-17'),
-    (9,  'HS-09', '南岭公建换热站', 4, 14.20, 80.0, 72.5, 43.0, 38.5, 25.0, 2, 1, '检修', '赵鹏', '南岭公建裙楼一层', '2025-12-28'),
-    (10, 'HS-10', '向阳街换热站',   5,  8.30,  0.0,  0.0,  0.0,  0.0, 25.0, 2, 0, '停用', '孙立军', '向阳街 47 号院内', '2025-07-14');
+                          pump_count, running_pump_count, station_status, feed_well_no, manager, address,
+                          last_maintain_date) VALUES
+    (1,  'HS-01', '朝阳里换热站',   1, 26.50, 94.0, 68.0, 52.0, 42.0, 25.0, 4, 3, '运行', 'J101', '张涛', '朝阳里小区东门南侧', '2025-10-08'),
+    (2,  'HS-02', '和平新村换热站', 1, 18.20, 90.0, 71.0, 48.0, 40.0, 25.0, 3, 2, '运行', 'J103', '刘敏', '和平新村 5 号楼旁', '2025-09-22'),
+    (3,  'HS-03', '滨河家园换热站', 1, 21.60, 86.0, 73.0, 46.0, 39.0, 25.0, 3, 2, '运行', 'J102', '周正阳', '滨河家园地下车库旁', '2025-11-03'),
+    (4,  'HS-04', '兴安里换热站',   2, 15.80, 92.0, 70.0, 50.0, 41.0, 25.0, 3, 3, '运行', 'J106', '吴国庆', '兴安里小区西配房', '2025-10-19'),
+    (5,  'HS-05', '北苑小区换热站', 2, 12.40, 78.0, 76.0, 41.0, 38.0, 25.0, 2, 1, '检修', 'J104', '郑立群', '北苑小区锅炉房旧址', '2025-12-11'),
+    (6,  'HS-06', '站前广场换热站', 2,  9.60,  0.0,  0.0,  0.0,  0.0, 25.0, 2, 0, '停用', 'J110', '马晓东', '站前广场地下夹层', '2025-08-30'),
+    (7,  'HS-07', '加州花园换热站', 3, 23.30, 91.0, 67.0, 51.0, 42.0, 25.0, 4, 3, '运行', 'J108', '李成志', '加州花园 12 号楼后', '2025-10-25'),
+    (8,  'HS-08', '西港新居换热站', 3, 17.90, 85.0, 69.0, 47.0, 40.0, 25.0, 3, 2, '运行', 'J109', '何雅丽', '西港新居泵房', '2025-11-17'),
+    (9,  'HS-09', '南岭公建换热站', 4, 14.20, 80.0, 72.5, 43.0, 38.5, 25.0, 2, 1, '检修', 'J111', '赵鹏', '南岭公建裙楼一层', '2025-12-28'),
+    (10, 'HS-10', '向阳街换热站',   5,  8.30,  0.0,  0.0,  0.0,  0.0, 25.0, 2, 0, '停用', NULL,  '孙立军', '向阳街 47 号院内', '2025-07-14');
 
--- 管网段 10 段（含 map_points 供平面示意图绘制）
+-- 管网段 12 段（含 map_points 供平面示意图绘制；PS-11 环网联络线、PS-12 城北热源联络线构成多路径环网）
 INSERT INTO pipe_segment (id, seg_code, start_well_no, end_well_no, diameter_dn, length_m, laying_type,
                           commission_year, insulation_status, segment_status, map_points, remark) VALUES
     (1,  'PS-01', 'J101', 'J102', 800, 486.0, '直埋', 2010, '完好', '运行', '80,120 320,120', '城东电厂出厂主干线，双管敷设'),
@@ -196,22 +265,27 @@ INSERT INTO pipe_segment (id, seg_code, start_well_no, end_well_no, diameter_dn,
     (7,  'PS-07', 'J107', 'J108', 400, 428.0, '管沟', 2018, '完好', '运行', '720,300 480,300', '西城老旧管网改造段'),
     (8,  'PS-08', 'J108', 'J109', 300, 396.0, '直埋', 2018, '完好', '运行', '480,300 240,300', '二次管网环网联络线'),
     (9,  'PS-09', 'J109', 'J110', 300, 288.0, '架空', 2019, '完好', '停用', '240,300 80,300', '停用待并网'),
-    (10, 'PS-10', 'J110', 'J111', 200, 352.0, '直埋', 2021, '破损', '运行', '80,300 80,440 300,440', '末端支线，DN200 接加州花园');
+    (10, 'PS-10', 'J110', 'J111', 200, 352.0, '直埋', 2021, '破损', '运行', '80,300 80,440 300,440', '末端支线，DN200 接加州花园'),
+    (11, 'PS-11', 'J103', 'J109', 400, 620.0, '管沟', 2022, '完好', '运行', '560,120 400,210 240,300', '东-西环网联络线，联络阀 J112 常态关闭，隔离时可作保供替代路径'),
+    (12, 'PS-12', 'J113', 'J106', 500, 538.0, '直埋', 2023, '完好', '运行', '1080,210 960,300', '城北热源厂进城联络线，J106 联络阀现场不可操作（阀杆抱死待修）');
 
--- 阀门井 11 座（坐标落在管段折线端点）
-INSERT INTO valve_well (id, well_no, well_location, valve_caliber_dn, open_state, repair_status, segment_id,
-                        last_check_date, remark, map_x, map_y) VALUES
-    (1,  'J101', '东环路与朝阳路交口东北角', 800, '全开',   '正常',   1,  '2026-02-05', '出厂总阀门，调节一次侧总流量',   80,  120),
-    (2,  'J102', '东环路中段绿化带',         800, '全开',   '正常',   2,  '2026-02-05', '主干分段阀',                    320, 120),
-    (3,  'J103', '东环路南段人行道',         600, '半开',   '正常',   3,  '2026-02-08', '架空管补偿器前阀门',            560, 120),
-    (4,  'J104', '兴安里街北侧',             600, '关闭',   '检修中', 4,  '2026-02-12', '随 PS-04 同步检修',             800, 120),
-    (5,  'J105', '南岭工业区入口',           600, '半开',   '检修中', 4,  '2026-02-12', '检修段末端隔离阀',              960, 120),
-    (6,  'J106', '西山路与南环路交口',       500, '全开',   '正常',   5,  '2026-02-09', '转输支线控制阀',                960, 300),
-    (7,  'J107', '西山路中段消防通道',       500, '关闭',   '检修中', 6,  '2026-02-15', '破损管段待大修，已隔离',        720, 300),
-    (8,  'J108', '西港新居停车场入口',       400, '全开',   '正常',   7,  '2026-02-10', '环网联络阀',                    480, 300),
-    (9,  'J109', '和平新村南侧巷道',         300, '全开',   '正常',   8,  '2026-02-10', '低区回水调节',                  240, 300),
-    (10, 'J110', '向阳街西侧便道',           300, '关闭',   '正常',   9,  '2026-01-28', '停用管段隔离阀',                80,  300),
-    (11, 'J111', '加州花园 12 号楼前',       200, '半开',   '正常',   10, '2026-02-18', '末端支线调节，防止远端不热',    300, 440);
+-- 阀门井 14 座（坐标落在管段折线端点；J103 节点有 J103/J112/J115 三台分属不同管段的阀）
+INSERT INTO valve_well (id, well_no, node_no, well_location, valve_caliber_dn, open_state, repair_status,
+                        operable, egress_exit, segment_id, last_check_date, remark, map_x, map_y) VALUES
+    (1,  'J101', 'J101', '东环路与朝阳路交口东北角', 800, '全开', '正常',   1, 1, 1,  '2026-02-05', '出厂总阀门，调节一次侧总流量；地面安全出口',   80,  120),
+    (2,  'J102', 'J102', '东环路中段绿化带',         800, '全开', '正常',   1, 0, 2,  '2026-02-05', '主干分段阀',                    320, 120),
+    (3,  'J103', 'J103', '东环路南段人行道',         600, '半开', '正常',   1, 1, 3,  '2026-02-08', '架空管补偿器前阀门；路口地面安全出口', 560, 120),
+    (4,  'J104', 'J104', '兴安里街北侧',             600, '关闭', '检修中', 1, 0, 4,  '2026-02-12', '随 PS-04 同步检修',             800, 120),
+    (5,  'J105', 'J105', '南岭工业区入口',           600, '半开', '正常',   1, 0, 4,  '2026-02-12', '检修段末端隔离阀（PS-04 端）', 960, 120),
+    (6,  'J106', 'J106', '西山路与南环路交口',       500, '全开', '检修中', 0, 1, 12, '2026-02-09', '城北联络阀，阀杆抱死现场不可操作；地面安全出口', 960, 300),
+    (7,  'J107', 'J107', '西山路中段消防通道',       500, '关闭', '正常',   1, 0, 6,  '2026-02-15', '破损管段待大修，已隔离',        720, 300),
+    (8,  'J108', 'J108', '西港新居停车场入口',       400, '全开', '正常',   1, 1, 7,  '2026-02-10', '西城热源出厂/环网联络阀；地面安全出口', 480, 300),
+    (9,  'J109', 'J109', '和平新村南侧巷道',         300, '全开', '正常',   1, 0, 8,  '2026-02-10', '低区回水调节',                  240, 300),
+    (10, 'J110', 'J110', '向阳街西侧便道',           300, '关闭', '正常',   1, 0, 9,  '2026-01-28', '停用管段隔离阀',                80,  300),
+    (11, 'J111', 'J111', '加州花园 12 号楼前',       200, '半开', '正常',   1, 0, 10, '2026-02-18', '末端支线调节，防止远端不热',    300, 440),
+    (12, 'J112', 'J103', '东环路南段联络阀井',       400, '关闭', '正常',   1, 0, 11, '2026-02-20', '环网联络线分段阀，常态关闭，故障隔离时按试算结论开启保供', 560, 142),
+    (13, 'J113', 'J113', '北三环进城计量站',         500, '全开', '正常',   1, 0, 12, '2026-02-22', '城北热源厂出厂分段阀',          1080, 210),
+    (14, 'J115', 'J103', '东环路南段东侧分阀井',     800, '全开', '正常',   1, 0, 2,  '2026-02-22', 'PS-02 东侧分段阀（与 J102 构成管段两端关断点）', 584, 100);
 
 -- 热用户 15 户（朝阳里小区 3 栋 × 4 单元构成 12 格矩阵）
 INSERT INTO resident (id, community, building_no, unit_no, room_no, area_m2, meter_no, total_heat_gj,

@@ -78,6 +78,10 @@ public class HeatStation {
     @Column(name = "station_status", length = 16)
     private String status;
 
+    /** 一次侧接入井号：换热站挂接管网的拓扑节点（停暖判定依据） */
+    @Column(name = "feed_well_no", length = 32)
+    private String feedWellNo;
+
     @Column(name = "manager", length = 32)
     private String manager;
 

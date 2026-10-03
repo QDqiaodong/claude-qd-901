@@ -54,7 +54,7 @@
           <polyline :points="seg.mapPoints" :stroke="insulColor(seg)" :stroke-width="pipeWidth(seg.diameterDn)"
                     :class="['pipe-line', { flowing: seg.segmentStatus === '运行' }]"
                     :stroke-dasharray="seg.segmentStatus === '运行' ? null : '14 9'"
-                    @click="focusSegment(seg)">
+                    @click="openSegPop($event, seg)">
             <title>{{ seg.segCode }}　DN{{ seg.diameterDn }}　{{ seg.lengthM }}m　{{ seg.layingType }}　保温{{ seg.insulationStatus }}　{{ seg.segmentStatus }}</title>
           </polyline>
           <text v-if="seg.startWellNo" :x="labelPos(seg).x" :y="labelPos(seg).y - pipeWidth(seg.diameterDn) - 6"
@@ -68,9 +68,38 @@
           <circle :cx="w.mapX" :cy="w.mapY" r="13" class="well-disc" :class="openClass(w)" />
           <text :x="w.mapX" :y="w.mapY + 4" class="well-mark">{{ w.openState === '全开' ? '开' : w.openState === '关闭' ? '关' : '半' }}</text>
           <text :x="w.mapX" :y="w.mapY - 22" class="well-name">{{ w.wellNo }}</text>
-          <title>{{ w.wellNo }}　{{ w.location }}　DN{{ w.valveCaliberDn }}　{{ w.openState }}　{{ w.repairStatus }}</title>
+          <text v-if="w.operable === false" :x="w.mapX + 12" :y="w.mapY - 10" class="well-flag bad"
+                title="现场不可操作">!</text>
+          <text v-if="w.egressExit" :x="w.mapX - 16" :y="w.mapY - 10" class="well-flag exit"
+                title="安全撤离通道口">安</text>
+          <title>{{ w.wellNo }}　{{ w.location }}　DN{{ w.valveCaliberDn }}　{{ w.openState }}　{{ w.repairStatus
+            }}{{ w.operable === false ? '　现场不可操作' : '' }}{{ w.egressExit ? '　安全撤离口' : '' }}</title>
         </g>
       </svg>
+
+      <!-- 管段操作浮层（发起隔离入口） -->
+      <transition name="popfade">
+        <div v-if="segPop" class="seg-pop" :style="segPopStyle">
+          <div class="pop-head">
+            <span class="well-no">{{ segPop.segCode }}</span>
+            <el-button size="small" text @click="segPop = null">关闭</el-button>
+          </div>
+          <div class="pop-row">{{ segPop.startWellNo }} → {{ segPop.endWellNo }}　DN{{ segPop.diameterDn }}　{{ segPop.lengthM }}m</div>
+          <div class="pop-row">
+            <el-tag size="small" :type="segPop.segmentStatus === '运行' ? 'success' : 'warning'">
+              {{ segPop.segmentStatus }}
+            </el-tag>
+            <el-tag size="small" :type="segPop.insulationStatus === '完好' ? 'success' : 'danger'" effect="plain">
+              保温{{ segPop.insulationStatus }}
+            </el-tag>
+          </div>
+          <div class="pop-row seg-remark">{{ segPop.remark }}</div>
+          <div class="pop-foot">
+            <el-button type="danger" size="small"
+                       @click="goIsolation(segPop.id)">该管段故障·发起隔离试算</el-button>
+          </div>
+        </div>
+      </transition>
 
       <!-- 就地操作浮层 -->
       <transition name="popfade">
@@ -106,6 +135,14 @@
             </el-radio-group>
           </div>
           <el-input v-model="popForm.remark" size="small" placeholder="操作备注" />
+          <div class="pop-row">
+            <span class="pop-field">井节点号</span>
+            <el-input v-model="popForm.nodeNo" size="small" style="width: 130px" placeholder="同节点可挂多阀" />
+          </div>
+          <div class="pop-row">
+            <el-checkbox v-model="popForm.operable">现场可操作</el-checkbox>
+            <el-checkbox v-model="popForm.egressExit">安全撤离通道口</el-checkbox>
+          </div>
           <div class="pop-foot">
             <el-button type="primary" size="small" :loading="saving" @click="submitWell">下发操作</el-button>
           </div>
@@ -118,13 +155,21 @@
       <div class="hs-panel-title">阀门井清单</div>
       <div class="hs-panel-body">
         <el-table :data="wells" border size="small" height="480">
-          <el-table-column prop="wellNo" label="井号" width="90" />
-          <el-table-column prop="location" label="位置" min-width="200" />
-          <el-table-column prop="valveCaliberDn" label="阀门口径" width="90" align="right">
+          <el-table-column prop="wellNo" label="井号" width="84" />
+          <el-table-column prop="nodeNo" label="节点" width="76" />
+          <el-table-column prop="location" label="位置" min-width="180" />
+          <el-table-column prop="valveCaliberDn" label="口径" width="72" align="right">
             <template #default="{ row }">DN{{ row.valveCaliberDn }}</template>
           </el-table-column>
-          <el-table-column prop="segCode" label="所属管段" width="100" />
-          <el-table-column prop="segmentStatus" label="管段状态" width="90" />
+          <el-table-column prop="segCode" label="所属" width="80" />
+          <el-table-column label="现场/撤离" width="92">
+            <template #default="{ row }">
+              <el-tag v-if="row.operable === false" size="small" type="danger">不可操作</el-tag>
+              <el-tag v-if="row.egressExit" size="small" type="warning">撤离口</el-tag>
+              <span v-if="row.operable !== false && !row.egressExit"
+                    :style="{ color: 'var(--hs-muted)' }">—</span>
+            </template>
+          </el-table-column>
           <el-table-column label="开关状态" width="150">
             <template #default="{ row }">
               <el-select v-model="row.openState" size="small" style="width: 100px"
@@ -169,8 +214,11 @@ const mapRef = ref(null)
 
 const popWell = ref(null)
 const popStyle = ref({})
-const popForm = ref({ openState: '', repairStatus: '', remark: '' })
+const popForm = ref({ openState: '', repairStatus: '', remark: '', nodeNo: '', operable: true, egressExit: false })
 const saving = ref(false)
+
+const segPop = ref(null)
+const segPopStyle = ref({})
 
 const openStates = ref(['全开', '半开', '关闭'])
 const repairStates = ref(['正常', '检修中'])
@@ -209,17 +257,43 @@ function labelPos(seg) {
 }
 
 function focusSegment(seg) {
-  ElMessage.info(`${seg.segCode}　DN${seg.diameterDn}　${seg.layingType}　保温${seg.insulationStatus}　${seg.segmentStatus}`)
+  openSegPop(null, seg)
+}
+
+function openSegPop(event, seg) {
+  popWell.value = null
+  segPop.value = seg
+  const rect = event && event.currentTarget
+    ? event.currentTarget.getBoundingClientRect()
+    : { left: window.innerWidth / 2, top: 120 }
+  segPopStyle.value = {
+    position: 'fixed',
+    left: Math.min(window.innerWidth - 300, rect.left + 20) + 'px',
+    top: Math.min(window.innerHeight - 260, rect.top - 10) + 'px'
+  }
+}
+
+function goIsolation(segmentId) {
+  window.location.hash = `#/isolation?seg=${segmentId}`
+  segPop.value = null
 }
 
 function openPop(event, well) {
   const rect = event.currentTarget.getBoundingClientRect()
+  segPop.value = null
   popWell.value = well
-  popForm.value = { openState: well.openState, repairStatus: well.repairStatus, remark: well.remark || '' }
+  popForm.value = {
+    openState: well.openState,
+    repairStatus: well.repairStatus,
+    remark: well.remark || '',
+    nodeNo: well.nodeNo || well.wellNo,
+    operable: well.operable !== false,
+    egressExit: !!well.egressExit
+  }
   popStyle.value = {
     position: 'fixed',
     left: Math.min(window.innerWidth - 300, rect.left + 28) + 'px',
-    top: Math.min(window.innerHeight - 330, rect.top - 10) + 'px'
+    top: Math.min(window.innerHeight - 400, rect.top - 10) + 'px'
   }
 }
 
@@ -462,6 +536,34 @@ onMounted(async () => {
   border: 1px solid var(--hs-primary-light-7);
   border-radius: 10px;
   box-shadow: 0 10px 28px rgba(13, 71, 161, 0.22);
+}
+
+.seg-pop {
+  z-index: 30;
+  width: 280px;
+  padding: 12px;
+  background: #fff;
+  border: 1px solid #f0b62a;
+  border-radius: 10px;
+  box-shadow: 0 10px 28px rgba(240, 140, 42, 0.25);
+}
+
+.seg-remark {
+  color: var(--hs-muted);
+}
+
+.well-flag {
+  font-size: 10px;
+  font-weight: 700;
+  text-anchor: middle;
+}
+
+.well-flag.bad {
+  fill: #e34d4d;
+}
+
+.well-flag.exit {
+  fill: #f08c2a;
 }
 
 .pop-head {

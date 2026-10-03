@@ -71,6 +71,21 @@ export const feeApi = {
   pay: (id, payload) => unwrap(http.post(`/fees/${id}/pay`, payload))
 }
 
+export const isolationApi = {
+  /** 选定故障管段试算（EXPAND / WAIT_ALT + 人工取舍） */
+  trial: (payload) => unwrap(http.post('/isolation/trials', payload)),
+  /** 人工调整后重新试算并重新证明 */
+  reTrial: (id, payload) => unwrap(http.post(`/isolation/plans/${id}/re-trial`, payload)),
+  enable: (id, operator) => unwrap(http.post(`/isolation/plans/${id}/enable`, null, { params: { operator } })),
+  list: () => unwrap(http.get('/isolation/plans')),
+  detail: (id) => unwrap(http.get(`/isolation/plans/${id}`)),
+  confirmStep: (planId, stepId, payload) =>
+    unwrap(http.post(`/isolation/plans/${planId}/steps/${stepId}/confirm`, payload || {})),
+  resolveFailure: (id, payload) => unwrap(http.post(`/isolation/plans/${id}/resolve-failure`, payload)),
+  restoreTrial: (id, operator) =>
+    unwrap(http.post(`/isolation/plans/${id}/restore-trial`, null, { params: { operator } }))
+}
+
 export const statsApi = {
   overview: () => unwrap(http.get('/stats/overview')),
   tempRisk: () => unwrap(http.get('/stats/temp-risk')),

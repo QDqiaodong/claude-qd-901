@@ -63,6 +63,10 @@ public class HeatSource {
     @Column(name = "commission_date")
     private LocalDate commissionDate;
 
+    /** 出厂井号：热源接入管网的拓扑节点（环网可达性计算起点之一） */
+    @Column(name = "outlet_well_no", length = 32)
+    private String outletWellNo;
+
     @OneToMany(mappedBy = "heatSource", fetch = FetchType.LAZY)
     private List<HeatStation> stations = new ArrayList<>();
 }

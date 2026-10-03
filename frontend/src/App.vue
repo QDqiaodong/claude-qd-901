@@ -75,7 +75,8 @@
       </header>
 
       <div class="viewport">
-        <component :is="current.view" :key="current.path" :tab="current.query.tab" />
+        <component :is="current.view" :key="current.path + (current.query.seg ? '-seg' + current.query.seg : '')"
+                   :tab="current.query.tab" :seg="current.query.seg" />
       </div>
     </main>
   </div>
@@ -93,6 +94,7 @@ const currentKey = computed(() => {
   const { path, query } = current.value
   if (path === '/stations') return 'source'
   if (path === '/network') return 'pipe'
+  if (path === '/isolation') return 'isolation'
   if (path === '/temperature') return 'resident'
   if (path === '/service') return query.tab === 'fees' ? 'fee' : 'order'
   return 'source'

@@ -144,6 +144,15 @@ public class PipeNetworkService {
             }
             well.setRepairStatus(request.getRepairStatus());
         }
+        if (request.getNodeNo() != null) {
+            well.setNodeNo(request.getNodeNo());
+        }
+        if (request.getOperable() != null) {
+            well.setOperable(request.getOperable());
+        }
+        if (request.getEgressExit() != null) {
+            well.setEgressExit(request.getEgressExit());
+        }
         if (request.getRemark() != null) {
             well.setRemark(request.getRemark());
         }
@@ -191,8 +200,9 @@ public class PipeNetworkService {
     }
 
     private ValveWellVO toWellVo(ValveWell well, PipeSegment segment, boolean segmentInitialized) {
-        return new ValveWellVO(well.getId(), well.getWellNo(), well.getLocation(), well.getValveCaliberDn(),
-                well.getOpenState(), well.getRepairStatus(),
+        return new ValveWellVO(well.getId(), well.getWellNo(), well.getNodeNo(), well.getLocation(),
+                well.getValveCaliberDn(), well.getOpenState(), well.getRepairStatus(),
+                well.getOperable(), well.getEgressExit(),
                 segment == null ? null : segment.getId(),
                 segment == null ? null : segment.getSegCode(),
                 segment == null ? null : segment.getSegmentStatus(),

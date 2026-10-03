@@ -41,6 +41,10 @@ public class ValveWell {
     @Column(name = "well_no", nullable = false, unique = true, length = 32)
     private String wellNo;
 
+    /** 井节点号：该阀门所在拓扑节点（同节点可挂多台分属不同管段的阀） */
+    @Column(name = "node_no", length = 32)
+    private String nodeNo;
+
     @Column(name = "well_location", length = 128)
     private String location;
 
@@ -55,6 +59,14 @@ public class ValveWell {
     /** 检修状态：正常 / 检修中 */
     @Column(name = "repair_status", length = 16)
     private String repairStatus;
+
+    /** 现场是否可操作：false 表示阀杆抱死 / 检修拆装 / 无法到位，方案不得安排其操作 */
+    @Column(name = "operable")
+    private Boolean operable = Boolean.TRUE;
+
+    /** 是否为井下作业人员安全撤离通道口 */
+    @Column(name = "egress_exit")
+    private Boolean egressExit = Boolean.FALSE;
 
     @ManyToOne(fetch = FetchType.LAZY)
     @JoinColumn(name = "segment_id")

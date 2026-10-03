@@ -7,10 +7,12 @@ import StationLoadView from '../views/StationLoadView.vue'
 import PipeNetworkView from '../views/PipeNetworkView.vue'
 import RoomTempView from '../views/RoomTempView.vue'
 import OrderFeeView from '../views/OrderFeeView.vue'
+import IsolationView from '../views/IsolationView.vue'
 
 export const routes = [
   { path: '/stations', view: StationLoadView, title: '换热站负载环阵列' },
   { path: '/network', view: PipeNetworkView, title: '管网平面示意图' },
+  { path: '/isolation', view: IsolationView, title: '管网隔离方案闭环' },
   { path: '/temperature', view: RoomTempView, title: '室温抽测热力格' },
   { path: '/service', view: OrderFeeView, title: '报修工单与收费台账' }
 ]
@@ -33,6 +35,14 @@ export const navNodes = [
     children: [
       { label: '管网平面示意图', hash: '#/network', tab: 'map' },
       { label: '阀门井清单', hash: '#/network?tab=wells', tab: 'wells' }
+    ]
+  },
+  {
+    key: 'isolation',
+    label: '管网隔离方案',
+    desc: '故障 → 隔离 → 复供',
+    children: [
+      { label: '隔离方案闭环', hash: '#/isolation', tab: 'plans' }
     ]
   },
   {
