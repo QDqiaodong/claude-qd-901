@@ -87,6 +87,10 @@ public class HeatStation {
     @Column(name = "last_maintain_date")
     private LocalDate lastMaintainDate;
 
+    /** 一次侧并网阀门井号：该井在拓扑上不可达任一运行热源即判停暖 */
+    @Column(name = "tap_well_no", length = 32)
+    private String tapWellNo;
+
     /** 该换热站带供热的用户 */
     @OneToMany(mappedBy = "station", fetch = FetchType.LAZY)
     private List<Resident> residents = new ArrayList<>();

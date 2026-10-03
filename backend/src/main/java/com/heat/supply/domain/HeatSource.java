@@ -63,6 +63,10 @@ public class HeatSource {
     @Column(name = "commission_date")
     private LocalDate commissionDate;
 
+    /** 出厂管接入一次网的根井号（拓扑试算的注水起点），为空表示该热源不直接注入管网 */
+    @Column(name = "root_well_no", length = 32)
+    private String rootWellNo;
+
     @OneToMany(mappedBy = "heatSource", fetch = FetchType.LAZY)
     private List<HeatStation> stations = new ArrayList<>();
 }

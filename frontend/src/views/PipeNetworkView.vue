@@ -8,6 +8,7 @@
         </div>
       </div>
       <div class="hs-head-ops">
+        <el-button size="small" type="warning" plain @click="goIsolation">管网隔离方案</el-button>
         <el-button size="small" plain @click="reload">刷新</el-button>
       </div>
     </div>
@@ -67,7 +68,10 @@
           <circle :cx="w.mapX" :cy="w.mapY" r="17" class="well-plate" />
           <circle :cx="w.mapX" :cy="w.mapY" r="13" class="well-disc" :class="openClass(w)" />
           <text :x="w.mapX" :y="w.mapY + 4" class="well-mark">{{ w.openState === '全开' ? '开' : w.openState === '关闭' ? '关' : '半' }}</text>
-          <text :x="w.mapX" :y="w.mapY - 22" class="well-name">{{ w.wellNo }}</text>
+          <text :x="w.mapX" :y="w.mapY - 22" class="well-name">
+            {{ w.wellNo }}<tspan v-if="w.inoperableFlag" class="well-flag bad">⚠不可操作</tspan><tspan
+              v-if="w.egressGuard" class="well-flag guard">⛑安全门</tspan>
+          </text>
           <title>{{ w.wellNo }}　{{ w.location }}　DN{{ w.valveCaliberDn }}　{{ w.openState }}　{{ w.repairStatus }}</title>
         </g>
       </svg>
@@ -210,6 +214,10 @@ function labelPos(seg) {
 
 function focusSegment(seg) {
   ElMessage.info(`${seg.segCode}　DN${seg.diameterDn}　${seg.layingType}　保温${seg.insulationStatus}　${seg.segmentStatus}`)
+}
+
+function goIsolation() {
+  window.location.hash = '#/isolation'
 }
 
 function openPop(event, well) {
@@ -452,6 +460,19 @@ onMounted(async () => {
   fill: #16324f;
   text-anchor: middle;
   pointer-events: none;
+}
+
+.well-flag {
+  font-size: 10px;
+  margin-left: 2px;
+}
+
+.well-flag.bad {
+  fill: var(--hs-danger);
+}
+
+.well-flag.guard {
+  fill: var(--hs-hot);
 }
 
 .well-pop {

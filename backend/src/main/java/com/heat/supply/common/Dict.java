@@ -43,6 +43,43 @@ public final class Dict {
     /** 管径筛选常用档位 */
     public static final List<Integer> DN_OPTIONS = List.of(200, 300, 400, 500, 600, 800);
 
+    // ---------------- 管网隔离方案 ----------------
+    /** 方案阶段 */
+    public static final List<String> ISO_PHASES = List.of(
+            "试算中", "待执行", "执行中", "已隔离", "已暂停", "已失败", "已复供", "已废止");
+
+    /** 取舍策略 */
+    public static final List<String> ISO_STRATEGIES = List.of("最小隔离", "扩大隔离", "拒绝启用");
+
+    /** 步骤阶段 */
+    public static final String STAGE_ISOLATE = "隔离";
+    public static final String STAGE_RESTORE = "复供";
+
+    /** 阀门动作类别 */
+    public static final String KIND_PLAN_CLOSE = "计划关闭";
+    public static final String KIND_ALREADY_CLOSED = "原本关闭";
+    public static final String KIND_MUST_OPEN = "必须开启";
+    public static final String KIND_PLAN_OPEN = "计划开启";
+
+    public static final List<String> ISO_ACTION_KINDS =
+            List.of(KIND_PLAN_CLOSE, KIND_ALREADY_CLOSED, KIND_MUST_OPEN, KIND_PLAN_OPEN);
+
+    /** 步骤状态 */
+    public static final List<String> ISO_STEP_STATUS =
+            List.of("待执行", "已完成", "跳过", "偏差", "冲突", "暂停");
+
+    public static boolean isValveClosed(String openState) {
+        return "关闭".equals(openState);
+    }
+
+    public static boolean isValidIsoPhase(String value) {
+        return value != null && ISO_PHASES.contains(value);
+    }
+
+    public static boolean isValidIsoStrategy(String value) {
+        return value != null && ISO_STRATEGIES.contains(value);
+    }
+
     // ---------------- 室温抽测 ----------------
     /** 室温达标下限（℃），低于该值判不达标 */
     public static final BigDecimal MIN_QUALIFIED_TEMP = BigDecimal.valueOf(18.0);

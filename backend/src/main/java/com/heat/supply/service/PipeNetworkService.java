@@ -196,6 +196,7 @@ public class PipeNetworkService {
                 segment == null ? null : segment.getId(),
                 segment == null ? null : segment.getSegCode(),
                 segment == null ? null : segment.getSegmentStatus(),
-                well.getLastCheckDate(), well.getRemark(), well.getMapX(), well.getMapY(), segmentInitialized);
+                well.getLastCheckDate(), well.getRemark(), well.getMapX(), well.getMapY(),
+                well.getInoperableFlag(), well.getEgressGuard(), segmentInitialized);
     }
 }

@@ -72,4 +72,12 @@ public class ValveWell {
 
     @Column(name = "map_y")
     private Integer mapY;
+
+    /** 现场不可操作：检修卡涩 / 被占压 / 处于泄漏区，隔离试算不得列入计划关断 */
+    @Column(name = "inoperable_flag")
+    private Boolean inoperableFlag;
+
+    /** 人员撤离安全门：关断序列里必须最后关闭、复供最先开启 */
+    @Column(name = "egress_guard")
+    private Boolean egressGuard;
 }

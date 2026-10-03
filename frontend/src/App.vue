@@ -92,7 +92,7 @@ const overview = ref({})
 const currentKey = computed(() => {
   const { path, query } = current.value
   if (path === '/stations') return 'source'
-  if (path === '/network') return 'pipe'
+  if (path === '/network' || path === '/isolation') return 'pipe'
   if (path === '/temperature') return 'resident'
   if (path === '/service') return query.tab === 'fees' ? 'fee' : 'order'
   return 'source'

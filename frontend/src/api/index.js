@@ -77,4 +77,21 @@ export const statsApi = {
   arrearsRank: () => unwrap(http.get('/stats/arrears-rank'))
 }
 
+export const isolationApi = {
+  /** 拓扑试算：故障管段 + 现场阀态覆盖 + 取舍策略 */
+  trial: (payload) => unwrap(http.post('/isolation/trial', payload)),
+  plans: (active) => unwrap(http.get('/isolation/plans', { params: { active } })),
+  plan: (id) => unwrap(http.get(`/isolation/plans/${id}`)),
+  activate: (id) => unwrap(http.post(`/isolation/plans/${id}/activate`)),
+  start: (id) => unwrap(http.post(`/isolation/plans/${id}/start`)),
+  confirmStep: (id, stepId, payload) =>
+    unwrap(http.post(`/isolation/plans/${id}/steps/${stepId}/confirm`, payload)),
+  finishFailure: (id, payload) => unwrap(http.post(`/isolation/plans/${id}/finish-failure`, payload)),
+  planRestore: (id) => unwrap(http.post(`/isolation/plans/${id}/restore/plan`)),
+  confirmRestoreStep: (id, stepId, payload) =>
+    unwrap(http.post(`/isolation/plans/${id}/restore/steps/${stepId}/confirm`, payload)),
+  topology: () => unwrap(http.get('/isolation/topology')),
+  dict: () => unwrap(http.get('/isolation/dict'))
+}
+
 export default http
